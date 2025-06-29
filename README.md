@@ -1,20 +1,13 @@
-# Flight   Delay  &  Weather  Monitor  — Step   1  MVP
+# ✈️ flight-wx
 
-A quick-start repo scaffold for ingesting hourly NOAA weather and BTS on‑time performance data, joining them for a single airport/month, and computing a first‑pass **`bad_wx_flag`**.
-
----
-
-## 1    Prerequisites
-
-* **Python  3.10** or newer.
-* **Conda / mamba** distribution (recommended) — Miniconda, Anaconda, or Micromamba.
-* 1–2   GB free disk for raw downloads + Parquet outputs.
+**Weather–Flight Delay Monitor**
+An end-to-end pipeline that combines FAA flight performance data with NOAA weather reports to identify bad-weather–exposed flights, aircraft, and carriers. Focused initially on JFK, the project supports both historical analysis and live ingestion readiness.
 
 ---
 
-## 2    Environment setup
+## Environment setup
 
-### 2.1    Create via `environment.yml`
+### Create via `environment.yml`
 
 Save the snippet below as `environment.yml` at the repo root and run the two commands that follow.
 
@@ -43,72 +36,97 @@ conda env create -f environment.yml   # or: mamba env create -f environment.yml
 conda activate flight-wx
 ```
 
-> **Tip  💡**    If you already have an environment, you can *merge* instead:
->
-> ```bash
-> conda env update -f environment.yml --prune
-> ```
+---
 
-### 2.2    Manual install (fallback)
+## 🚀 Project Goals
 
-If you prefer installing packages ad‑hoc:
+* Join FAA **BTS On-Time Performance** data with hourly **NOAA ISD-Lite** weather logs.
+* Flag flights experiencing adverse conditions at **departure or arrival** (e.g., wind > 30 kt, precipitation).
+* Analyze patterns in weather-induced delay risk across **airlines**, **aircraft**, and **time-of-day**.
+* Provide a clean foundation for building:
 
-```bash
-conda create -n flight-wx python=3.10 pandas numpy requests pyarrow duckdb tqdm jupyterlab
-conda activate flight-wx
-pip install python-dotenv
-```
+  * Real-time ingestion from OpenSky + METAR feeds.
+  * A delay-prediction model.
+  * An interactive operations dashboard.
 
 ---
 
-## 3    Running Step  1
+## 📁 Data Sources
 
-With the environment active and `step1_ingest_katl.py` in the repo root:
-
-```bash
-python step1_ingest_katl.py --year 2024 --month 1 --airport KATL
-```
-
-\###  3.1    What the script does
-
-1. Downloads the BTS on‑time CSV for **January  2024** (≈  250  MB).
-2. Pulls NOAA **ISD‑Lite** hourly weather for Atlanta (station 722190‑13874).
-3. Buckets scheduled‑departure to the nearest hour and joins weather on
-   `(flight_date, sched_dep_hour, ORIGIN)`.
-4. Flags `bad_wx_flag` when visibility  <  5   km, wind  >  30   kt, low ceiling, or precip.
-5. Persists two Parquet files under `data/`:
-
-   * `flights_2024_01_KATL.parquet`
-   * `flights_wx_join_2024_01_KATL.parquet`
-
-A summary line prints the share of flights in bad weather so you can sanity‑check the month (typical winter value ≈  12  %).
+| Source                       | Type        | Link                                                                            |
+| ---------------------------- | ----------- | ------------------------------------------------------------------------------- |
+| 🛫 FAA BTS Flight Data       | Monthly CSV | [transtats.bts.gov](https://transtats.bts.gov/OT_Delay/OT_DelayCause1.asp?pn=1) |
+| 🌦️ NOAA ISD-Lite Weather    | Hourly GZIP | [ncei.noaa.gov](https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/)              |
+| 🛁 (Planned) OpenSky ADS-B   | JSON API    | [opensky-network.org](https://opensky-network.org/apidoc/)                      |
+| 🌐 (Planned) Real-time METAR | JSON API    | [weather.gov](https://www.weather.gov/documentation/services-web-api)           |
 
 ---
 
-## 4    Project structure (after Step   1)
+## ⚙️ Project Structure
 
 ```
-.
+wxflight/
 ├── data/
-│     ├── raw/
-│     │     ├── isd_lite_202401_KATL.gz
-│     │     └── bts_otp_202401.csv
-│     ├── flights_2024_01_KATL.parquet
-│     └── flights_wx_join_2024_01_KATL.parquet
-├── step1_ingest_katl.py
-├── environment.yml
-└── README.md
+│   ├── bronze/       ← raw downloaded data (zip, gz)
+│   ├── silver/       ← joined Parquet files (by airport & month)
+├── step1.py          ← ingest + join script (BTS + ISD-Lite)
+├── utils.py          ← helpers for download, parsing, and merging
+├── README.md
+└── environment.yml   ← conda setup
 ```
 
 ---
 
-## 5    Next milestones
+## ✅ Step 1: Static Ingest & Join
 
-| Step  | Goal                                                                        |
-| ----- | --------------------------------------------------------------------------- |
-| **2** | Parameterise the ingest script to any airport + month, push to Airflow DAG. |
-| **3** | Add live ADS‑B & METAR streaming via Kafka → DuckDB.                        |
-| **4** | Build aggregation models (`agg_tail_day`, `fleet_exposure`).                |
-| **5** | Stand‑up Apache Superset dashboard.                                         |
+Run this for a given month and airport (e.g. JFK, Dec 2023):
 
-Happy hacking  🚀 — open an issue or ping me if you hit snags!
+```bash
+python step1.py 2023 12 KJFK
+```
+
+This will:
+
+* Download hourly weather data for KJFK
+* Download BTS on-time performance (reporting or marketing carrier)
+* Join weather to both origin and destination of each flight
+* Create `bad_wx_flag = 1` when adverse conditions are present
+* Save a tidy joined Parquet for modeling or dashboard use
+
+---
+
+## 🦚 Coming Soon
+
+* `step2_live_ingest.py`: Live ingestion of OpenSky + METAR into appendable tables
+* `step3_modeling.ipynb`: Predict delay probability using carrier, time, and weather
+* `dashboard/`: Superset views + SQL queries for visualizing bad-weather exposure
+
+---
+
+## 🛠️ Setup
+
+```bash
+conda env create -f environment.yml
+conda activate flight-wx
+```
+
+Required packages:
+
+* `pandas`, `requests`, `pyarrow`, `duckdb`
+* (Optional: `plotly`, `superset`, `spark` for later stages)
+
+---
+
+## 📊 Example: Bad Weather × Arrival Delay
+
+```
+ARR_DELAY     False   True
+bad_wx_flag
+0            505093   49087
+1             14356    1858
+```
+
+→ \~2.8% of flights were exposed to bad weather at JFK in Dec 2023.
+
+---
+
