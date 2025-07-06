@@ -15,28 +15,45 @@ so you can run it locally, verify the numbers, then port the logic into Airflow/
 """
 
 from __future__ import annotations
-
 import argparse
-import datetime as dt
 import gzip
 import io
-import tempfile
+import json
+import os
 import zipfile
 from pathlib import Path
-from textwrap import dedent
-
 import pandas as pd
 import requests
+from functools import lru_cache
+import concurrent.futures
 
-# ---------------------------------------------------------------------------
-# Constants & look‑ups – extend as you add more airports.
-# ---------------------------------------------------------------------------
 # Mapping of IATA airport --> (USAF, WBAN) identifiers used by ISD‑Lite files
-ISD_STATIONS: dict[str, tuple[int, int]] = {
-    "ATL": (722190, 13874),  # Atlanta Hartsfield‑Jackson , {USAF, WBAN}
-    "KJFK": (744860, 94789),
-    "KLAX": (722950, 23174),
-}
+# ISD_STATIONS: dict[str, tuple[int, int]] = {
+#     "ATL": (722190, 13874),  # Atlanta Hartsfield‑Jackson , {USAF, WBAN}
+#     "KJFK": (744860, 94789),
+#     "KLAX": (722950, 23174),
+# }
+
+@lru_cache  # cache in-memory so repeated runs in the same process are instant
+def load_isd_station_map() -> dict[str, tuple[int, int]]:
+    url = "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv"
+    df = pd.read_csv(url)
+
+    df = df[(df["CTRY"] == "US") & df["ICAO"].str.startswith("K")]
+    df["IATA"] = df["ICAO"].str[1:]
+
+    df["USAF"] = df["USAF"].astype(str)
+    df["WBAN"] = df["WBAN"].astype(str)
+
+    # keep purely-numeric IDs ≠ NOAA sentinels
+    df = df[
+        df["USAF"].str.isdigit() & df["WBAN"].str.isdigit()
+        & (df["USAF"] != "999999") & (df["WBAN"] != "99999")
+    ]
+
+    return {r.IATA: (int(r.USAF), int(r.WBAN)) for _, r in df.iterrows()}
+
+
 
 BTS_BASE = (
     "https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_(1987_present)_{year}_{month}.zip"
@@ -57,6 +74,16 @@ ISD_COLS = [
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
+
+def cached_station_map(path="isd_station_map.json"):
+    if os.path.exists(path):
+        return json.load(open(path))
+    data = load_isd_station_map()
+    with open(path, "w") as f:
+        json.dump(data, f)
+    return data
+
 
 def fetch_file(url: str) -> bytes:
     """Download *url* and return raw bytes, with a tiny progress hint."""
@@ -195,31 +222,35 @@ def read_bts_flights(year: int, month: int) -> pd.DataFrame:
     return df.rename(columns=rename_map)[list(CANONICAL)]
 
 
-
-
 # ---------------------------------------------------------------------------
 # Main routine
 # ---------------------------------------------------------------------------
 
 def main(year: int, month: int, airport_iata: str = "ATL") -> None:
-    print(
-        dedent(
-            f"""
-            === Step 1 ingest & join – {airport_iata} {year}-{month:02d} ===
-            """
-        )
-    )
-
-    if airport_iata not in ISD_STATIONS:
-        raise SystemExit(f"No ISD station mapping for {airport_iata}. Add it to ISD_STATIONS.")
-
-    usaf, wban = ISD_STATIONS[airport_iata]
-
-    wx = read_isd_lite(usaf, wban, year, month, airport_iata)
-    print("Weather rows:", len(wx))
-
+    print(f"=== Step 1 ingest & join – {airport_iata} {year}-{month:02d} ===\n")
     flights = read_bts_flights(year, month)
     print("Flight rows:", len(flights))
+
+    station_map = load_isd_station_map()
+    airports = pd.unique(pd.concat([flights["ORIGIN"], flights["DEST"]]))
+    airports = [a for a in airports if a in station_map]
+
+    def fetch_ap(ap: str) -> pd.DataFrame:
+        usaf, wban = station_map[ap]
+        try:
+            return read_isd_lite(usaf, wban, year, month, ap)
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                print(f"⚠️  No ISD-Lite file for {ap} ({usaf}-{wban}); skipping.")
+                return pd.DataFrame()  # empty – will be dropped later
+            raise  # re-raise unexpected errors
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+            wx_tables = list(pool.map(fetch_ap, airports))
+
+    wx_tables = [t for t in wx_tables if not t.empty]
+    wx = pd.concat(wx_tables, ignore_index=True)
+    print("Weather rows:", len(wx))
 
     flights["flight_date"] = pd.to_datetime(flights["FL_DATE"]).dt.date
 
@@ -230,11 +261,6 @@ def main(year: int, month: int, airport_iata: str = "ATL") -> None:
             .astype(int)
             // 100
     ).astype("int8")
-
-    # wx came from read_isd_lite() and has index = UTC timestamp
-    wx["flight_date"] = wx.index.date
-    wx["hour"] = wx.index.hour.astype("int8")
-    wx["station"] = airport_iata[-3:]  # 'KJFK' -> 'JFK'; 3-letter IATA
 
     # Keep only the columns needed for the join
     wx_hourly = wx[["flight_date", "hour", "station", "wx_score"]]
@@ -275,6 +301,7 @@ def main(year: int, month: int, airport_iata: str = "ATL") -> None:
     print(f"\nBad-weather share: {share_bad:0.1f} % (rule-of-thumb winter 10-15 %)\n")
 
     out_path = Path(f"files/joined_sample_{airport_iata}_{year}_{month:02d}.parquet")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     flights.to_parquet(out_path, index=False)
     print("Saved joined sample →", out_path)
 
@@ -283,7 +310,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Step 1 ingest + join for one airport/month")
     p.add_argument("year", type=int, help="four‑digit year, e.g. 2024")
     p.add_argument("month", type=int, help="month number 1‑12")
-    p.add_argument("airport", type=str, default="ATL", nargs="?", help="IATA code (default ATL)")
+    p.add_argument("airport", type=str, default="ATL", nargs="?", help="IATA code (default KJFK)")
     args = p.parse_args()
 
     main(args.year, args.month, args.airport.upper())
