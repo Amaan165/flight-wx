@@ -76,23 +76,6 @@ ISD_COLS = [
 # ---------------------------------------------------------------------------
 
 
-def cached_station_map(path="isd_station_map.json"):
-    if os.path.exists(path):
-        return json.load(open(path))
-    data = load_isd_station_map()
-    with open(path, "w") as f:
-        json.dump(data, f)
-    return data
-
-
-def fetch_file(url: str) -> bytes:
-    """Download *url* and return raw bytes, with a tiny progress hint."""
-    print(f"→ Downloading {url} ...", flush=True)
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    print(f" ...done ( {len(r.content) / 1_048_576:.2f} MiB)")
-    return r.content
-
 
 def read_isd_lite(usaf: int, wban: int, year: int, month: int, airport_iata) -> pd.DataFrame:
     """
