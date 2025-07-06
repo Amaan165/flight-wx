@@ -1,0 +1,17 @@
+name: flight-wx
+channels:
+  - conda-forge
+dependencies:
+  # core
+  - python>=3.10
+  - pandas>=2.2
+  - numpy
+  - pyarrow             # fast Parquet IO
+  - duckdb
+  - requests
+  - tqdm
+  # optional / dev
+  - jupyterlab
+  - pip
+  - pip:
+      - python-dotenv    # manage API keys if needed
