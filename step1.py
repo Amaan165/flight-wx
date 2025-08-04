@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 """
-Step 1 – Historical ingest & join for a single airport/month
+Step 1 - Historical ingest & join for a single airport/month
 ===========================================================
-*  Download **NOAA ISD‑Lite** hourly weather for the given station ‑> DataFrame `wx`
-*  Download **BTS On‑Time Performance** data for the same month ‑> DataFrame `flights`
-*  Bucket flight scheduled‑departure to the nearest hour and **left‑join** on
+*  Download **NOAA ISD-Lite** hourly weather for the given station -> DataFrame `wx`
+*  Download **BTS On-Time Performance** data for the same month -> DataFrame `flights`
+*  Bucket flight scheduled-departure to the nearest hour and **left-join** on
    `(flight_date, hour, origin airport)`.
 *  Compute a simple `bad_wx_flag` that marks hours with either high wind speed
    or measurable precipitation.
-*  Print a cross‑tab so you can eyeball that the bad‑weather share is ≈ 10–15 % in winter.
+*  Print a cross-tab so you can eyeball that the bad-weather share is ≈ 10-15 % in winter.
 
-This script is deliberately **self‑contained** – no external ETL framework required –
+This script is deliberately **self-contained** - no external ETL framework required -
 so you can run it locally, verify the numbers, then port the logic into Airflow/dbt.
 """
 import argparse
@@ -102,7 +102,7 @@ def load_tail_lookup(cache="tail_lookup.parquet") -> pd.DataFrame:
         faa["TAIL_NUM"] = faa["TAIL_NUM"].str.strip().str.upper()
         frames.append(faa)
     except Exception as e:
-        print("⚠︎  FAA registry download failed – continuing with OpenSky only.")
+        print("⚠︎  FAA registry download failed - continuing with OpenSky only.")
 
     # -------- OpenSky db (fast GitHub CDN) --------
     sky_url = "https://opensky-network.org/datasets/metadata/aircraftDatabase.csv"
@@ -163,7 +163,7 @@ def read_isd_lite(usaf: int, wban: int, year: int, month: int, airport_iata) -> 
     # ------------------------------------------------------------------------------
     df = df[df["month"] == month]
     if df.empty:
-        raise RuntimeError("Month filter removed all rows – check parsing.")
+        raise RuntimeError("Month filter removed all rows - check parsing.")
     # Build a proper UTC timestamp index.
     df["ts"] = pd.to_datetime(
         {
@@ -306,7 +306,7 @@ def choose_from(choices: list[str]) -> str:
     print("Resolved to multiple airports:")
     for idx, code in enumerate(choices, 1):
         row = geo.loc[code]
-        print(f"  {idx}. {code} – {row['municipality']} / {row['name']}")
+        print(f"  {idx}. {code} - {row['municipality']} / {row['name']}")
     sel = int(input(f"Select 1-{len(choices)}: "))
     return choices[sel - 1]
 # ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ def choose_from(choices: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def main(year: int, month: int, airport_iata: str = "ATL") -> None:
-    print(f"=== Step 1 ingest & join – {airport_iata} {year}-{month:02d} ===\n")
+    print(f"=== Step 1 ingest & join - {airport_iata} {year}-{month:02d} ===\n")
     flights = read_bts_flights(year, month)
     print("Flight rows:", len(flights))
 
@@ -330,7 +330,7 @@ def main(year: int, month: int, airport_iata: str = "ATL") -> None:
             return df
         except requests.HTTPError as e:
             if e.response.status_code == 404:
-                # print(f"  ⚠︎  {ap:3s}  no ISD-Lite file – skipped")
+                # print(f"  ⚠︎  {ap:3s}  no ISD-Lite file - skipped")
                 return pd.DataFrame()
             raise
 
@@ -356,7 +356,7 @@ def main(year: int, month: int, airport_iata: str = "ATL") -> None:
     # Keep only the columns needed for the join
     wx_hourly = wx[["flight_date", "hour", "station", "wx_score"]]
 
-    # Merge: left‑join flights → weather (if no match leave NaN → assume good weather)
+    # Merge: left-join flights → weather (if no match leave NaN → assume good weather)
     # ---------------- ORIGIN join ----------------
     flights = flights.merge(
         wx_hourly,
@@ -403,8 +403,8 @@ def main(year: int, month: int, airport_iata: str = "ATL") -> None:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Step 1 ingest + join for one airport/month")
-    p.add_argument("year", type=int, help="four‑digit year, e.g. 2024")
-    p.add_argument("month", type=int, help="month number 1‑12")
+    p.add_argument("year", type=int, help="four-digit year, e.g. 2024")
+    p.add_argument("month", type=int, help="month number 1-12")
     p.add_argument("airport", help="IATA code or city name (e.g. 'JFK' or 'los angeles')")
     p.add_argument("--pick", type=int, help="choose nth airport when resolver returns multiple")
     args = p.parse_args()
